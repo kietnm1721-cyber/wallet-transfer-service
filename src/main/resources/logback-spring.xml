@@ -1,0 +1,46 @@
+<configuration>
+    <!-- JSON encoder dùng cho cả console và file -->
+    <appender name="JSON_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeMdcKeyName>requestId</includeMdcKeyName>
+            <includeMdcKeyName>requestorId</includeMdcKeyName>
+            <includeMdcKeyName>transferId</includeMdcKeyName>
+        </encoder>
+    </appender>
+
+    <!-- File appender: ghi ra /var/log/wallet/app.log, rotation hàng ngày, giữ 30 ngày, max 1GB tổng -->
+    <appender name="JSON_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>/var/log/wallet/app.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <!-- Rotate hàng ngày, nén gzip -->
+            <fileNamePattern>/var/log/wallet/app.%d{yyyy-MM-dd}.log.gz</fileNamePattern>
+            <!-- Giữ tối đa 30 file (30 ngày) -->
+            <maxHistory>30</maxHistory>
+            <!-- Tổng dung lượng tất cả file không vượt 1GB -->
+            <totalSizeCap>1GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeMdcKeyName>requestId</includeMdcKeyName>
+            <includeMdcKeyName>requestorId</includeMdcKeyName>
+            <includeMdcKeyName>transferId</includeMdcKeyName>
+        </encoder>
+    </appender>
+
+    <!-- AsyncAppender wrap cả 2: non-blocking, không block transfer thread khi I/O chậm -->
+    <!-- queueSize=512: buffer 512 log events trước khi block — đủ cho burst traffic -->
+    <!-- discardingThreshold=0: không bao giờ drop log dù queue đầy (default là drop TRACE/DEBUG khi 80% full) -->
+    <appender name="ASYNC" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>512</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <appender-ref ref="JSON_CONSOLE"/>
+        <appender-ref ref="JSON_FILE"/>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="ASYNC"/>
+    </root>
+
+    <logger name="com.wallet" level="DEBUG" additivity="false">
+        <appender-ref ref="ASYNC"/>
+    </logger>
+</configuration>
