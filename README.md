@@ -7,7 +7,7 @@ This is a production-ready fintech backend built for the take-home assessment. I
 ## Quick Start
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/kietnm1721-cyber/wallet-transfer-service.git
 cd wallet-transfer-service
 docker compose up --build
 ```
@@ -24,6 +24,26 @@ No local JDK needed — Docker handles everything.
 | Password | wallet_pass |
 
 Flyway migrations run automatically on startup. The app is ready when you see `Started WalletApplication` in the logs.
+
+## Demo Script
+
+Run the end-to-end demo script to verify all 5 API operations automatically:
+
+```bash
+chmod +x demo.sh
+./demo.sh
+```
+
+The script will:
+1. Create 5 wallets with different balances
+2. GET each wallet and verify balance
+3. Submit 30 transfers between wallets
+4. Reconcile transfers via GET /transfers/{id}
+5. Check ledger entries via GET /wallets/{id}/transactions
+6. Verify idempotency — same transferId submitted twice moves money once
+7. Verify double-entry invariant via DB query
+
+Expected output: all checks green, `✓ All checks passed`
 
 To run the test suite (requires JDK 21):
 ```bash
