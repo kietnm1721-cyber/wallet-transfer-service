@@ -2,6 +2,8 @@ package com.wallet.transfer;
 
 import com.wallet.BaseIntegrationTest;
 import com.wallet.shared.exception.IdempotencyConflictException;
+import com.wallet.transfer.adapter.out.persistence.LedgerJpaRepository;
+import com.wallet.transfer.domain.EntryType;
 import com.wallet.transfer.port.in.TransferUseCase;
 import com.wallet.wallet.port.in.CreateWalletUseCase;
 import com.wallet.wallet.port.out.WalletRepository;
@@ -9,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -24,6 +27,7 @@ class IdempotencyTest extends BaseIntegrationTest {
     @Autowired CreateWalletUseCase createWalletUseCase;
     @Autowired TransferUseCase transferUseCase;
     @Autowired WalletRepository walletRepository;
+    @Autowired LedgerJpaRepository ledgerJpaRepository;
 
     @Test
     void sameTransferIdSubmittedTwice_moneyMovesOnce() {
@@ -95,17 +99,35 @@ class IdempotencyTest extends BaseIntegrationTest {
     }
 
     @Test
-    void doubleEntryInvariant_exactlyTwoLedgerEntriesPerTransfer() {
+    void doubleEntryInvariant_exactlyOneDebitAndOneCreditPerTransfer() {
         var from = createWalletUseCase.createWallet("Alice", "USD", new BigDecimal("1000.00"));
         var to   = createWalletUseCase.createWallet("Bob",   "USD", new BigDecimal("0.00"));
 
-        // Submit same transferId 3 times
+        // Submit same transferId 3 times — only 1 should produce ledger entries
         UUID transferId = UUID.randomUUID();
         transferUseCase.transfer(transferId, from.id(), to.id(), new BigDecimal("100.00"));
         transferUseCase.transfer(transferId, from.id(), to.id(), new BigDecimal("100.00"));
         transferUseCase.transfer(transferId, from.id(), to.id(), new BigDecimal("100.00"));
 
-        // Balance proves only 1 deduction happened
+        // Query DB directly — must be exactly 2 entries for this transferId
+        var entries = ledgerJpaRepository.findAll().stream()
+                .filter(e -> transferId.equals(e.getTransferId()))
+                .toList();
+
+        assertThat(entries).hasSize(2);
+
+        long debits  = entries.stream().filter(e -> EntryType.DEBIT.name().equals(e.getType())).count();
+        long credits = entries.stream().filter(e -> EntryType.CREDIT.name().equals(e.getType())).count();
+
+        assertThat(debits).isEqualTo(1);
+        assertThat(credits).isEqualTo(1);
+
+        // Amounts must match — balanced entry
+        var debit  = entries.stream().filter(e -> EntryType.DEBIT.name().equals(e.getType())).findFirst().orElseThrow();
+        var credit = entries.stream().filter(e -> EntryType.CREDIT.name().equals(e.getType())).findFirst().orElseThrow();
+        assertThat(debit.getAmount()).isEqualByComparingTo(credit.getAmount());
+
+        // Balance confirms only 1 deduction despite 3 submissions
         assertThat(walletRepository.computeBalance(from.id()))
                 .isEqualByComparingTo(new BigDecimal("900.00"));
     }

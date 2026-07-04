@@ -27,36 +27,39 @@ Flyway migrations run automatically on startup. The app is ready when you see `S
 
 ## Demo Script
 
-Run the end-to-end demo script to verify all 5 API operations automatically:
+Run the end-to-end demo script to verify all API operations automatically:
 
 ```bash
-chmod +x demo.sh
-./demo.sh
+chmod +x demo-v2.sh
+./demo-v2.sh
 ```
 
 The script will:
-1. Create 5 wallets with different balances
-2. GET each wallet and verify balance
-3. Submit 30 transfers between wallets
-4. Reconcile transfers via GET /transfers/{id}
-5. Check ledger entries via GET /wallets/{id}/transactions
-6. Verify idempotency — same transferId submitted twice moves money once
-7. Verify double-entry invariant via DB query
+1. Truncate DB to ensure clean state
+2. Create 5 wallets with different balances
+3. GET each wallet and verify balance is computed from ledger
+4. Submit 30 transfers across wallets
+5. Verify balances updated after transfers
+6. Reconcile transfers via GET /transfers/{id}
+7. Check ledger entries via GET /wallets/{id}/transactions
+8. Verify idempotency — same transferId submitted twice moves money once
+9. Verify double-entry invariant via DB query
 
 Expected output: all checks green, `✓ All checks passed`
 
-To run the test suite (requires JDK 21):
+## Running the Test Suite
+
+Requires JDK 21 and Docker running (tests use Testcontainers):
+
 ```bash
 ./gradlew test
 ```
 
-Tests use Testcontainers — Docker must be running. The suite covers idempotency, concurrency, and all API endpoints against a real PostgreSQL instance.
+The suite covers idempotency, concurrency, and all API endpoints against a real PostgreSQL instance.
 
 ---
 
----
-
-## 2. Architecture Overview
+## 1. Architecture Overview
 
 **Hexagonal Architecture (Ports & Adapters)**
 
@@ -91,7 +94,7 @@ Domain logic (balance computation, transfer rules, overdraw check) lives in pure
 
 ---
 
-## 3. Idempotency & Overdraw Prevention
+## 2. Idempotency & Overdraw Prevention
 
 ### Idempotency
 
@@ -105,6 +108,10 @@ CONSTRAINT uq_transfer_idempotency UNIQUE (id, from_wallet_id, to_wallet_id, amo
 Client supplies `transferId` (UUID) in request body. On duplicate submission:
 - DB rejects INSERT with unique constraint violation
 - Application catches `DataIntegrityViolationException` → returns existing record
+
+Two-layer defense:
+- Layer 1 (application): `findById` check handles sequential retries — returns existing transfer, no reprocessing
+- Layer 2 (DB constraint): handles concurrent race — two requests arriving simultaneously both pass Layer 1 before either commits; only one INSERT wins
 
 See: `transfer/domain/TransferService.java` — idempotency check at top of `transfer()` method, and `DataIntegrityViolationException` catch block for concurrent race condition.
 
@@ -133,12 +140,19 @@ BigDecimal balance = walletRepository.computeBalance(fromWalletId);
 if (balance.compareTo(amount) < 0) throw new InsufficientFundsException(...);
 ```
 
-See: `wallet/adapter/out/persistence/WalletJpaRepository.java` — `lockById()` and `computeBalance()`.
+### Double-Entry Ledger
+
+Every transfer writes exactly 2 ledger entries in the same transaction — one DEBIT from the sender, one CREDIT to the receiver. Both entries use positive amounts, differentiated by `type` only. A wallet's balance is always computed live from the ledger (`SUM(CREDIT) - SUM(DEBIT)`), never stored as a mutable field.
+
+**Note on initial balance:** When a wallet is created with an initial balance, a seed CREDIT entry is written with `transfer_id = NULL`. This is an intentional design simplification — the assessment scope does not require a "system float" account. The double-entry guarantee holds for all wallet-to-wallet transfers: every transfer produces exactly 1 DEBIT + 1 CREDIT with matching amounts, verified by `IdempotencyTest.doubleEntryInvariant_exactlyOneDebitAndOneCreditPerTransfer()`.
+
+See: `transfer/domain/TransferService.java` — ledger writes after balance check.
+See: `wallet/adapter/out/persistence/WalletJpaRepository.java` — `computeBalance()` native SQL.
 See: `transfer/domain/TransferService.java` — lock ordering and balance check.
 
 ---
 
-## 4. What I Would Do Differently
+## 3. What I Would Do Differently
 
 **Balance snapshot pattern** — currently `GET /wallets/{id}` aggregates all ledger entries to compute balance. For a wallet with years of history this degrades over time.
 
@@ -152,7 +166,7 @@ This is a common pattern in fintech ledger systems and the right production answ
 
 ---
 
-## 5. Zero-Downtime NOT NULL Column
+## 4. Zero-Downtime NOT NULL Column
 
 To add a new NOT NULL column to `ledger_entries` in production without downtime:
 
