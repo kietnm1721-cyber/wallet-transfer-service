@@ -9,10 +9,11 @@ This is a production-ready fintech backend built for the take-home assessment. I
 ```bash
 git clone https://github.com/kietnm1721-cyber/wallet-transfer-service.git
 cd wallet-transfer-service
+./gradlew bootJar -x test
 docker compose up --build
 ```
 
-No local JDK needed — Docker handles everything.
+`./gradlew bootJar` builds the JAR locally (requires JDK 21). Docker then packages and runs it — no JDK needed inside the container.
 
 | | |
 |---|---|
@@ -98,20 +99,18 @@ Domain logic (balance computation, transfer rules, overdraw check) lives in pure
 
 ### Idempotency
 
-Enforced at **database level** via UNIQUE constraint:
+Enforced at **database level** via PRIMARY KEY constraint on `transfers.id`:
 
 ```sql
--- Flyway migration: V2__create_transfers.sql
-CONSTRAINT uq_transfer_idempotency UNIQUE (id, from_wallet_id, to_wallet_id, amount)
+-- transfers.id is UUID PRIMARY KEY — duplicate INSERT on same transferId
+-- violates PK constraint, caught as DataIntegrityViolationException
+id UUID PRIMARY KEY
 ```
 
-Client supplies `transferId` (UUID) in request body. On duplicate submission:
-- DB rejects INSERT with unique constraint violation
-- Application catches `DataIntegrityViolationException` → returns existing record
+Client supplies `transferId` (UUID) in request body. Two-layer defense:
 
-Two-layer defense:
 - Layer 1 (application): `findById` check handles sequential retries — returns existing transfer, no reprocessing
-- Layer 2 (DB constraint): handles concurrent race — two requests arriving simultaneously both pass Layer 1 before either commits; only one INSERT wins
+- Layer 2 (DB PRIMARY KEY): handles concurrent race — two requests arriving simultaneously both pass Layer 1 before either commits; only one INSERT wins, the other gets a PK violation → caught and returned as 409
 
 See: `transfer/domain/TransferService.java` — idempotency check at top of `transfer()` method, and `DataIntegrityViolationException` catch block for concurrent race condition.
 
