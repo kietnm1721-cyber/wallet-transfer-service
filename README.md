@@ -99,18 +99,18 @@ Domain logic (balance computation, transfer rules, overdraw check) lives in pure
 
 ### Idempotency
 
-Enforced at **database level** via PRIMARY KEY constraint on `transfers.id`:
+Enforced at **database level** via a named UNIQUE constraint that explicitly signals idempotency intent:
 
 ```sql
--- transfers.id is UUID PRIMARY KEY — duplicate INSERT on same transferId
--- violates PK constraint, caught as DataIntegrityViolationException
-id UUID PRIMARY KEY
+-- Flyway migration: V2__create_transfers.sql
+CONSTRAINT uq_transfer_idempotency
+    UNIQUE (id, from_wallet_id, to_wallet_id, amount)
 ```
 
 Client supplies `transferId` (UUID) in request body. Two-layer defense:
 
 - Layer 1 (application): `findById` check handles sequential retries — returns existing transfer, no reprocessing
-- Layer 2 (DB PRIMARY KEY): handles concurrent race — two requests arriving simultaneously both pass Layer 1 before either commits; only one INSERT wins, the other gets a PK violation → caught and returned as 409
+- Layer 2 (DB constraint): handles concurrent race — two requests arriving simultaneously both pass Layer 1 before either commits; only one INSERT wins, the other gets a constraint violation → caught as `DataIntegrityViolationException` → 409
 
 See: `transfer/domain/TransferService.java` — idempotency check at top of `transfer()` method, and `DataIntegrityViolationException` catch block for concurrent race condition.
 
